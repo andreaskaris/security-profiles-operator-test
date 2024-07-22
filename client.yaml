@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: client
+  namespace: unix-socket
+  labels:
+    k8s-app: client
+spec:
+  selector:
+    matchLabels:
+      name: client
+  template:
+    metadata:
+      labels:
+        name: client
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+      - name: client
+        image: registry.fedoraproject.org/fedora-toolbox:latest
+        securityContext:
+          privileged: false
+        command:
+          # https://www.baeldung.com/linux/python-unix-sockets
+          - /usr/bin/python
+          - "-u"
+          - "-c"
+          - |
+            import socket
+            import os
+            import time
+            import datetime
+            import sys
+            import signal
+
+            socket_path = '/var/lib/misc/service.sock'
+
+            def term_handler(signum, info):
+                print(f"{datetime.datetime.now()}: Got termination signal, stopping; signum: {signum}, info: {info}")
+                sys.exit()
+            
+            signal.signal(signal.SIGTERM, term_handler)
+
+            while True:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                
+                # Connect to the server
+                client.connect(socket_path)
+                
+                # Send a message to the server
+                message = f'Hello from the client!'
+                client.sendall(message.encode())
+                
+                # Receive a response from the server
+                response = client.recv(1024)
+                print(f'{datetime.datetime.now()}: Received response: {response.decode()}')
+                
+                # Close the connection
+                client.close()
+                time.sleep(5)
+        resources:
+          limits:
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:
+        - name: varlibmisc
+          mountPath: /var/lib/misc
+      terminationGracePeriodSeconds: 30
+      serviceAccountName: unix-socket
+      volumes:
+      - name: varlibmisc
+        hostPath:
+          path: /var/lib/misc

@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: server
+  namespace: unix-socket
+  labels:
+    k8s-app: server
+spec:
+  selector:
+    matchLabels:
+      name: server
+  template:
+    metadata:
+      labels:
+        name: server
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+      - name: server
+        image: registry.fedoraproject.org/fedora-toolbox:latest
+        lifecycle:
+          preStop:
+            exec:
+              command: ["rm", "-f", "/var/lib/misc/service.sock" ]
+        command:
+          # https://www.baeldung.com/linux/python-unix-sockets
+          - /usr/bin/python
+          - "-u"
+          - "-c"
+          - |
+            import socket
+            import os
+            import datetime
+            import signal
+            import sys
+
+            socket_path = '/var/lib/misc/service.sock'
+            try:
+                os.unlink(socket_path)
+            except OSError:
+                if os.path.exists(socket_path):
+                    raise
+
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+
+
+            def term_handler(signum, info):
+                print(f"{datetime.datetime.now()}: Got termination signal, stopping; signum: {signum}, info: {info}")
+                server.close()
+            
+            signal.signal(signal.SIGTERM, term_handler)
+
+            server.bind(socket_path)
+            server.listen(1)
+            print(f"{datetime.datetime.now()}: Listening on socket: {socket_path}")
+            try:
+                while True:
+                    connection = None
+                    connection, client_address = server.accept()
+
+                    print(f"{datetime.datetime.now()}: Connection accepted on socket: {socket_path}")
+                    # receive data from the client
+                    while True:
+                        data = connection.recv(1024)
+                        if not data:
+                            break
+                        print(f'{datetime.datetime.now()}: Received data:', data.decode())
+                
+                        # Send a response back to the client
+                        response = 'Hello from the server!'
+                        print(f"{datetime.datetime.now()}: Sending response: {response}")
+                        connection.sendall(response.encode())
+            finally:
+                # close the connection
+                print("{datetime.datetime.now()}: Closing the connection")
+                if connection is not None:
+                    connection.close()
+                sys.exit()
+        resources:
+          limits:
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:
+        - name: varlibmisc
+          mountPath: /var/lib/misc
+      serviceAccountName: unix-socket
+      volumes:
+      - name: varlibmisc
+        hostPath:
+          path: /var/lib/misc
